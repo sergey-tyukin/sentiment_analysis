@@ -4,7 +4,10 @@
 .Ruserdata
 
 config/api_key.R
-data/**/*
-output/**/*
+
+data/processed/*
+data/raw/*
+
+output/tables/*
 
 !**/.gitkeep
