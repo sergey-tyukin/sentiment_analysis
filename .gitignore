@@ -5,3 +5,4 @@
 
 config/api_key.R
 data/**/*
+output/**/*
