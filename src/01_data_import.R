@@ -41,6 +41,6 @@ readr::write_rds(moex_listing_2_3,
 
 raw_quotes <- lapply(moex_listing_2_3$ticker, get_stock_data, api.moex_alogpack)
 names(raw_quotes) <- moex_listing_2_3$ticker
-readr::write_rds(raw_sentiment,
+readr::write_rds(raw_quotes,
                  here("data", "processed", "raw_quotes.rds"),
                  compress = "gz")
