@@ -3,8 +3,8 @@ library(here)
 library(dplyr)
 library(tidyr)
 
-source("config\\api_key.R")
-source("src\\functions\\algopack.R")
+source(here("config", "api_key.R"))
+source(here("src", "functions", "algopack.R"))
 
 
 # Подгрузка готовых данных по сентименту
