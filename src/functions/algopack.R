@@ -5,16 +5,16 @@ get_prices <- function(ticker, from, to, api_key) {
     till = format(to, "%Y-%m-%d"),
     interval = 24
   )
-  
+
   url <- httr::modify_url(base_url, query = params)
-  
+
   response <- httr::GET(
     url,
     httr::add_headers(
       "Authorization" = paste("Bearer", api_key)
     )
   )
-  
+
   stopifnot(response[["status_code"]] == 200)
   raw_data <- httr::content(response)
   if (length(raw_data$candles$data) != 0) {
@@ -43,7 +43,7 @@ get_prices_all <- function(ticker, api_key) {
 
 get_stock_data <- function(ticker, api_key) {
   prices <- get_prices_all(ticker, api_key)
-  
+
   result <- prices |>
     mutate(
       date = as.Date(begin),
@@ -53,6 +53,6 @@ get_stock_data <- function(ticker, api_key) {
     ) |>
     select(date, price, volume, return) |>
     arrange(date)
-  
+
   return(result)
 }
