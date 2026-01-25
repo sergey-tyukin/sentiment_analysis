@@ -10,6 +10,7 @@ source(here("src", "functions", "algopack.R"))
 # Подгрузка готовых данных по сентименту
 
 raw_sentiment <- read_excel(here("data", "raw", "Sent_2019-2025.xlsx"))
+raw_sentiment$date <- as.Date(raw_sentiment$date)
 readr::write_rds(raw_sentiment,
                  here("data", "processed", "raw_sentiment.rds"),
                  compress = "gz")
