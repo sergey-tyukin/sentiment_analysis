@@ -3,7 +3,7 @@ library(here)
 
 
 get_stats <- function(asset) {
-  asset_ret <- na.omit(asset$return)
+  asset_ret <- na.omit(asset$ret)
 
   list(
     n_obs = length(asset_ret),
