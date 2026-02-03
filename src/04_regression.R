@@ -58,11 +58,11 @@ regression_quadratic <- function(ticker, lag = 0){
   current_result <- list(
     ticker = ticker,
     lag = lag,
-    model_type = "quadratic",  # <-- ВАЖНО: "quadratic" вместо "linear"
+    model_type = "quadratic",
     coef_sentiment = coef(model)["sentiment_lag"],
-    coef_sentiment_sq = coef(model)["I(sentiment_lag^2)"],  # <-- ДОБАВЛЕНО: квадратичный коэффициент
+    coef_sentiment_sq = coef(model)["I(sentiment_lag^2)"],  
     p_value_linear = smry$coefficients["sentiment_lag", "Pr(>|t|)"],
-    p_value_quadratic = smry$coefficients["I(sentiment_lag^2)", "Pr(>|t|)"],  # <-- ДОБАВЛЕНО: p-value квадратичного члена
+    p_value_quadratic = smry$coefficients["I(sentiment_lag^2)", "Pr(>|t|)"],
     r_squared = smry$r.squared,
     adj_r_squared = smry$adj.r.squared,
     f_statistic = smry$fstatistic[1],
