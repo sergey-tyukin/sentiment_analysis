@@ -25,7 +25,7 @@ readr::write_rds(raw_securities,
                  here("data", "processed", "raw_securities.rds"),
                  compress = "gz")
 
-moex_listing_2_3 <- raw_securities |>
+moex_listing <- raw_securities |>
   filter(SUPERTYPE == "Акции") |>
   select(TRADE_CODE, LIST_SECTION) |>
   drop_na() |>
@@ -36,7 +36,7 @@ moex_listing_2_3 <- raw_securities |>
   rename(ticker = TRADE_CODE, listing = LIST_SECTION) |>
   arrange(listing, ticker)
 
-readr::write_rds(moex_listing_2_3,
+readr::write_rds(moex_listing,
                  here("data", "processed", "moex_listing_2_3.rds"),
                  compress = "gz")
 
