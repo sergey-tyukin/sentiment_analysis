@@ -37,14 +37,14 @@ moex_listing <- raw_securities |>
   arrange(listing, ticker)
 
 readr::write_rds(moex_listing,
-                 here("data", "processed", "moex_listing_2_3.rds"),
+                 here("data", "processed", "moex_listing.rds"),
                  compress = "gz")
 
 
 # Получаем котировки с помощью MOEX Algopack ----
 
-raw_quotes <- lapply(moex_listing_2_3$ticker, get_stock_data, api.moex_alogpack)
-names(raw_quotes) <- moex_listing_2_3$ticker
+raw_quotes <- lapply(moex_listing$ticker, get_stock_data, api.moex_alogpack)
+names(raw_quotes) <- moex_listing$ticker
 raw_quotes <- raw_quotes[order(names(raw_quotes))]
 readr::write_rds(raw_quotes,
                  here("data", "processed", "raw_quotes.rds"),
