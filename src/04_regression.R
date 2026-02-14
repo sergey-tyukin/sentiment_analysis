@@ -5,7 +5,8 @@ library(dplyr)
 
 
 # Функция сведения данных для регрессионного анализа ----
-prepare_regression_data <- function(ticker, lag){
+
+prepare_regression_data <- function(ticker, raw_sentiment, lag){
   common_dates <- intersect(raw_sentiment$date, raw_quotes[[ticker]]$date)
   
   regression_data <- data.frame(
@@ -25,9 +26,10 @@ prepare_regression_data <- function(ticker, lag){
 }
 
 
-# Линейная регрессия ----
-regression_linear <- function(ticker, lag=0){
-  df <- prepare_regression_data(ticker, lag)
+# Функция для линейной регрессии ----
+
+regression_linear <- function(ticker, raw_sentiment, lag=0){
+  df <- prepare_regression_data(ticker, raw_sentiment, lag)
   
   model <- lm(ret ~ sentiment_lag, data = df)
   smry <- summary(model)
@@ -48,9 +50,10 @@ regression_linear <- function(ticker, lag=0){
 }
 
 
-# Квадратичная регрессия ----
-regression_quadratic <- function(ticker, lag = 0){
-  df <- prepare_regression_data(ticker, lag)
+# Функция для квадратичной регрессии ----
+
+regression_quadratic <- function(ticker, raw_sentiment, lag = 0){
+  df <- prepare_regression_data(ticker, raw_sentiment, lag)
   
   model <- lm(ret ~ sentiment_lag + I(sentiment_lag^2), data = df)
   smry <- summary(model)
@@ -72,16 +75,21 @@ regression_quadratic <- function(ticker, lag = 0){
   current_result
 }
 
-raw_quotes <- readr::read_rds(here("data", "processed", "raw_quotes.rds"))
-raw_sentiment <- readr::read_rds(here("data", "processed", "raw_sentiment.rds"))
 
-df <- prepare_regression_data('AKRN', 0)
+# Регрессионный анализ ----
+
+raw_quotes <- readr::read_rds(here("data", "processed", "quotes_spread.rds"))
+sentiment <- readr::read_rds(here("data", "processed", "sentiment.rds"))
+selected_tickers <- readr::read_rds(here("data", "processed", "selected_tickers.rds"))
+
+
+# df <- prepare_regression_data('AKRN', 0, )
 
 lags <- -2:7
 results_df <- map_dfr(lags, function(lag_val) {
-  linear_results <- map_dfr(selected_tickers, regression_linear, lag = lag_val)
-  quadratic_results <- map_dfr(selected_tickers, regression_quadratic, lag = lag_val)
+  linear_results <- map_dfr(selected_tickers, regression_linear, sentiment, lag = lag_val)
+  quadratic_results <- map_dfr(selected_tickers, regression_quadratic, sentiment, lag = lag_val)
   bind_rows(linear_results, quadratic_results)
 })
 
-write_xlsx(results_df, here("output", "tables", "Regression.xlsx"))
+write_xlsx(results_df, here("output", "tables", "regression.xlsx"))

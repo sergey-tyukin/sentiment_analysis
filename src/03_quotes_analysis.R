@@ -1,6 +1,7 @@
 library(writexl)
 library(dplyr)
 library(here)
+source(here("config", "params.R"))  # min_quotes_threshold
 
 
 get_stats <- function(asset) {
@@ -22,8 +23,8 @@ get_stats <- function(asset) {
   )
 }
 
-moex_listing <- readr::read_rds(here("data", "processed", "moex_listing_2_3.rds"))
-raw_quotes_spread <- readr::read_rds(here("data", "processed", "raw_quotes_spread.rds"))
+moex_listing <- readr::read_rds(here("data", "processed", "securities_listing.rds"))
+raw_quotes_spread <- readr::read_rds(here("data", "processed", "quotes_spread.rds"))
 securities_stats_all <- purrr::map_dfr(raw_quotes_spread, get_stats, .id = "ticker")
 
 securities_stats_all <- securities_stats_all |>
@@ -31,12 +32,12 @@ securities_stats_all <- securities_stats_all |>
   relocate(listing, .after = ticker)
 
 securities_stats <- securities_stats_all |>
-  filter(n_obs_ret >= 50 & n_obs_spread >= 50)
+  filter(n_obs_ret >= min_quotes_threshold & n_obs_spread >= min_quotes_threshold)
 
 print("Не включены в статистику следующие тикеры:")
 print(securities_stats_all |>
-        filter(n_obs_ret < 50 | n_obs_spread < 50) |>
+        filter(n_obs_ret < min_quotes_threshold | n_obs_spread < min_quotes_threshold) |>
         select(ticker, listing, n_obs_ret, n_obs_spread)
 )
 
-write_xlsx(securities_stats, here("output", "tables", "Securities_stats.xlsx"))
+write_xlsx(securities_stats, here("output", "tables", "securities_stats.xlsx"))

@@ -11,21 +11,21 @@ source(here("src", "functions", "algopack.R"))
 
 # Подгрузка готовых данных по сентименту ----
 
-raw_sentiment <- read_excel(here("data", "raw", "Sent_2019-2025.xlsx"))
-raw_sentiment$date <- as.Date(raw_sentiment$date)
-readr::write_rds(raw_sentiment,
-                 here("data", "processed", "raw_sentiment.rds"),
+sentiment <- read_excel(here("data", "raw", "Sent_2019-2025.xlsx"))
+sentiment$date <- as.Date(sentiment$date)
+readr::write_rds(sentiment,
+                 here("data", "processed", "sentiment.rds"),
                  compress = "gz")
 
 
 # Подгрузка уровней листинга на MOEX ----
 
-raw_securities <- read_excel(here("data", "raw", "Listing.xlsx"), guess_max = 5000)
-readr::write_rds(raw_securities,
-                 here("data", "processed", "raw_securities.rds"),
+securities_info <- read_excel(here("data", "raw", "Listing.xlsx"), guess_max = 5000)
+readr::write_rds(securities_info,
+                 here("data", "raw", "securities_info.rds"),
                  compress = "gz")
 
-moex_listing <- raw_securities |>
+securities_listing <- securities_info |>
   filter(SUPERTYPE == "Акции") |>
   select(TRADE_CODE, LIST_SECTION) |>
   drop_na() |>
@@ -36,19 +36,16 @@ moex_listing <- raw_securities |>
   rename(ticker = TRADE_CODE, listing = LIST_SECTION) |>
   arrange(listing, ticker)
 
-readr::write_rds(moex_listing,
-                 here("data", "processed", "moex_listing.rds"),
+readr::write_rds(securities_listing,
+                 here("data", "processed", "securities_listing.rds"),
                  compress = "gz")
 
 
 # Получаем котировки с помощью MOEX Algopack ----
 
-raw_quotes <- lapply(moex_listing$ticker, get_stock_data, api.moex_alogpack)
-names(raw_quotes) <- moex_listing$ticker
+raw_quotes <- lapply(securities_listing$ticker, get_stock_data, api.moex_alogpack)
+names(raw_quotes) <- securities_listing$ticker
 raw_quotes <- raw_quotes[order(names(raw_quotes))]
-readr::write_rds(raw_quotes,
-                 here("data", "processed", "raw_quotes.rds"),
-                 compress = "gz")
 
 
 # Подгружаем значение спреда ----
@@ -94,8 +91,51 @@ update_ticker <- function(ticker, df_quotes) {
   return(df_merged)
 }
 
-raw_quotes_spread <- Map(update_ticker, names(raw_quotes), raw_quotes)
+quotes_spread <- Map(update_ticker, names(raw_quotes), raw_quotes)
 
-readr::write_rds(raw_quotes_spread,
-                 here("data", "processed", "raw_quotes_spread.rds"),
+readr::write_rds(quotes_spread,
+                 here("data", "processed", "quotes_spread.rds"),
+                 compress = "gz")
+
+
+# Получаемы рыночные значения ----
+
+## Получаем доходности индексов ----
+
+imoex_quotes <- read_parquet(here("data", "raw", "imoex_quotes_raw.parquet"))
+moexbmi_quotes <- read_parquet(here("data", "raw", "moexbmi_quotes_raw.parquet"))
+
+moexbmi_quotes <- moexbmi_quotes |>
+  rename(price = close) |>
+  mutate(
+    ret_moexbmi = log(price / lag(price)),
+    date = as.Date(end)
+  ) |>
+  select(date, ret_moexbmi)
+
+imoex_quotes <- imoex_quotes |>
+  rename(price = close) |>
+  mutate(
+    ret_imoex = log(price / lag(price)),
+    date = as.Date(end)
+  ) |>
+  select(date, ret_imoex)
+
+## Считаем значение спреда ----
+
+total_volume <- quotes_spread |>
+  bind_rows() |>
+  group_by(date) |>
+  summarise(
+    total_volume = sum(volume, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  arrange(date)
+
+market_params <- total_volume |>
+  full_join(imoex_quotes, by = "date") |>
+  full_join(moexbmi_quotes, by = "date")
+
+readr::write_rds(market_params,
+                 here("data", "processed", "market_params.rds"),
                  compress = "gz")
