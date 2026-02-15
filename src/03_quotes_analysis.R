@@ -24,8 +24,8 @@ get_stats <- function(asset) {
 }
 
 moex_listing <- readr::read_rds(here("data", "processed", "securities_listing.rds"))
-raw_quotes_spread <- readr::read_rds(here("data", "processed", "quotes_spread.rds"))
-securities_stats_all <- purrr::map_dfr(raw_quotes_spread, get_stats, .id = "ticker")
+quotes_spread <- readr::read_rds(here("data", "processed", "quotes_spread.rds"))
+securities_stats_all <- purrr::map_dfr(quotes_spread, get_stats, .id = "ticker")
 
 securities_stats_all <- securities_stats_all |>
   left_join(select(moex_listing, ticker, listing), by = "ticker") |>
