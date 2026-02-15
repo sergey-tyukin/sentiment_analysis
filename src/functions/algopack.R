@@ -48,10 +48,10 @@ get_stock_data <- function(ticker, api_key) {
     mutate(
       date = as.Date(begin),
       price = as.numeric(close),
-      volume = as.numeric(volume),
+      value = as.numeric(value),
       ret = log(price / lag(price))
     ) |>
-    select(date, price, volume, ret) |>
+    select(date, price, value, ret) |>
     arrange(date)
 
   return(result)

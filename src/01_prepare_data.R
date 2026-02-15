@@ -121,18 +121,19 @@ imoex_quotes <- imoex_quotes |>
   ) |>
   select(date, ret_imoex)
 
-## Считаем значение спреда ----
 
-total_volume <- quotes_spread |>
+## Считаем объем рыночных торгов ----
+
+total_value <- quotes_spread |>
   bind_rows() |>
   group_by(date) |>
   summarise(
-    total_volume = sum(volume, na.rm = TRUE),
+    total_value = sum(value, na.rm = TRUE),
     .groups = "drop"
   ) |>
   arrange(date)
 
-market_params <- total_volume |>
+market_params <- total_value |>
   full_join(imoex_quotes, by = "date") |>
   full_join(moexbmi_quotes, by = "date")
 
