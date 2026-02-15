@@ -17,6 +17,7 @@ get_stats <- function(asset) {
     skewness = moments::skewness(asset_ret),
     kurtosis = moments::kurtosis(asset_ret),
     volatility = sd(asset_ret),  # sd() использует формулу с (n-1)
+    value_share = median(asset$value_share, na.rm = TRUE),
     spread_bbo = median(asset$spread_bbo, na.rm = TRUE),
     spread_lv10 = median(asset$spread_lv10, na.rm = TRUE),
     spread_1mio = median(asset$spread_1mio, na.rm = TRUE)

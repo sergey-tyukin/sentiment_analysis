@@ -4,7 +4,7 @@ library(here)
 # 1. Подготовка данных ----
 # - сентимент (data/processed/sentiment.rds)
 # - уровни листинга (data/processed/securities_listing.rds)
-# - котировки и спред акций (data/processed/quotes_spread.rds)
+# - котировки, спред акций и объем торгов (data/processed/quotes_spread.rds)
 # - рыночный объем торгов и доходность (data/processed/market_params.rds)
 # Дополнительно:
 # - все данные по акциям (data/raw/securities_info.rds)

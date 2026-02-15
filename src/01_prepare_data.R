@@ -93,10 +93,6 @@ update_ticker <- function(ticker, df_quotes) {
 
 quotes_spread <- Map(update_ticker, names(raw_quotes), raw_quotes)
 
-readr::write_rds(quotes_spread,
-                 here("data", "processed", "quotes_spread.rds"),
-                 compress = "gz")
-
 
 # Получаемы рыночные значения ----
 
@@ -139,4 +135,30 @@ market_params <- total_value |>
 
 readr::write_rds(market_params,
                  here("data", "processed", "market_params.rds"),
+                 compress = "gz")
+
+
+# Добавляем относительную долю рынка ----
+
+add_value_share <- function(ticker_df, market_df) {
+  ticker_df |>
+    left_join(
+      market_df |> select(date, total_value),
+      by = "date"
+    ) |>
+    mutate(
+      value_share = case_when(
+        is.na(total_value) | total_value <= 0 ~ NA_real_,
+        TRUE ~ value / total_value
+      ),
+      .after = value
+    ) |>
+    select(-total_value)
+}
+
+quotes_spread <- quotes_spread |>
+  map(add_value_share, market_df = market_params)
+
+readr::write_rds(quotes_spread,
+                 here("data", "processed", "quotes_spread.rds"),
                  compress = "gz")
