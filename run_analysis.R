@@ -24,5 +24,6 @@ source(here('src', '03_quotes_analysis.R'))
 
 
 # 4. Линейная регрессия ----
+# - результаты регрессии (data/processed/regression.rds)
 # - таблица с результатами регрессионного анализа (output/tables/regression.xlsx)
 source(here('src', '04_regression.R'))

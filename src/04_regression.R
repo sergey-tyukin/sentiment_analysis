@@ -19,7 +19,7 @@ prepare_regression_data <- function(ticker, raw_sentiment, lag){
     match(regression_data$date, market_params$date)
   ]
 
-  if(lag < 0){
+  if(lag < 0){  # отрицательный лаг - котировки вперёд новостей
     regression_data$sentiment_lag <- lead(regression_data$sentiment, -lag)
   } else {
     regression_data$sentiment_lag <- lag(regression_data$sentiment, lag)
@@ -106,15 +106,18 @@ quotes_spread <- readr::read_rds(here("data", "processed", "quotes_spread.rds"))
 sentiment <- readr::read_rds(here("data", "processed", "sentiment.rds"))
 selected_tickers <- readr::read_rds(here("data", "processed", "selected_tickers.rds"))
 market_params <- readr::read_rds(here("data", "processed", "market_params.rds"))
-
-
-
+securities_listing <- readr::read_rds(here("data", "processed", "securities_listing.rds"))
 
 lags <- -2:7
-results_df <- map_dfr(lags, function(lag_val) {
-  linear_results <- map_dfr(selected_tickers, regression_linear, sentiment, lag = lag_val)
-  quadratic_results <- map_dfr(selected_tickers, regression_quadratic, sentiment, lag = lag_val)
-  bind_rows(linear_results, quadratic_results)
-})
+regression <- map_dfr(lags, function(lag_val) {
+    linear_results <- map_dfr(selected_tickers, regression_linear, sentiment, lag = lag_val)
+    quadratic_results <- map_dfr(selected_tickers, regression_quadratic, sentiment, lag = lag_val)
+    bind_rows(linear_results, quadratic_results)
+  }) |>
+  left_join(securities_listing, by = "ticker") |>
+  relocate(listing, .after = ticker)
 
-write_xlsx(results_df, here("output", "tables", "regression.xlsx"))
+readr::write_rds(regression,
+                 here("data", "processed", "regression.rds"),
+                 compress = "gz")
+write_xlsx(regression, here("output", "tables", "regression.xlsx"))
