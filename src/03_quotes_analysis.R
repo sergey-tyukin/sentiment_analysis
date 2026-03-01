@@ -1,4 +1,3 @@
-library(writexl)
 library(dplyr)
 library(here)
 source(here("config", "params.R"))  # min_quotes_threshold
@@ -45,4 +44,4 @@ readr::write_rds(securities_stats,
                  here("data", "processed", "securities_stats.rds"),
                  compress = "gz")
 
-write_xlsx(securities_stats, here("output", "tables", "securities_stats.xlsx"))
+openxlsx::write.xlsx(securities_stats, here("output", "tables", "securities_stats.xlsx"))
