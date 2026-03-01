@@ -41,4 +41,8 @@ print(securities_stats_all |>
         select(ticker, listing, n_obs_ret, n_obs_spread)
 )
 
+readr::write_rds(securities_stats,
+                 here("data", "processed", "securities_stats.rds"),
+                 compress = "gz")
+
 write_xlsx(securities_stats, here("output", "tables", "securities_stats.xlsx"))
