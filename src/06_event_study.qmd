@@ -1,0 +1,579 @@
+---
+title: "06_event_study"
+format: html
+editor: visual
+---
+
+# Загрузка и настройка
+
+## Импорты библиотек
+
+```{r, output=FALSE}
+library(here)
+library(dplyr)
+library(ggplot2)
+```
+
+## Тикеры для исключения
+
+```{r}
+stop_tickers <- c(
+  'RBCM',  # РБК - часто упоминается, как новостной канал
+  'VEON-RX',
+  'UWGN',
+  'MGNZ'
+  )
+```
+
+## Переменные
+
+Мы оцениваем параметры рыночной модели ($\alpha$ и $\beta$) на исторических данных до события (est_windows).
+
+```{r}
+threshold <- 0.5  # порог сентимента (минимум 1 положительная новость без отрицательных)
+est_window <- c(-63, -4)  # размер окна оценки
+min_est_obs <- 30  # минимальное количество наблюдений для оценки доходности
+event_window <- c(-3, 6)  # размер окна события
+
+```
+
+## Загрузка информаци
+
+```{r}
+# Загружаем сентимент
+sentiment <- readr::read_rds(here("data", "processed", "sentiment2.rds"))
+
+# Загружаем уровни листинга
+securities_listing <- readr::read_rds(here("data", "processed", "securities_listing.rds"))
+
+# Загружаем котировки, объемы и спред
+quotes_spread <- readr::read_rds(here("data", "processed", "quotes_spread.rds"))
+
+# Загружаем статистику по акциям
+securities_stats <- readr::read_rds(here("data", "processed", "securities_stats.rds"))
+
+# Загружаем статистику по акциям
+market_params <- readr::read_rds(here("data", "processed", "market_params.rds"))
+```
+
+# Выбираем тикеры, для которых есть вся информация
+
+```{r}
+tickers_sent <- names(sentiment)[-1]
+print(paste("Тикеров имеют значения сентимента: ", length(tickers_sent)))
+
+tickers_sent_2_and_more <- names(sentiment |>
+  select(where(
+    ~ sum(!is.na(.x)) > 1 |
+      max(.x, na.rm = T) > threshold |
+      min(.x, na.rm = T) < -threshold)
+    )
+  )
+print(paste("Тикеров фигурировало хотя бы в двух сообщениях: ", length(tickers_sent)))
+
+tickers_quotes <- names(quotes_spread)
+print(paste("Тикеров имеют котировки: ", length(tickers_quotes)))
+
+tickers_listing_23 <- securities_listing |>
+  filter(listing %in% c(2, 3)) |>
+  pull(ticker)
+print(paste("Тикеров 2 и 3 уровня листинга: ", length(tickers_listing_23)))
+
+tickers_min_volume <- securities_stats |>
+  filter(value_share <= 0.005) |>
+  pull(ticker)
+print(paste("Тикеров с объемом торгов до 0,5% от биржевого: ", length(tickers_min_volume)))
+
+tickers <- Reduce(intersect, list(tickers_sent, tickers_sent_2_and_more, tickers_quotes, tickers_listing_23, tickers_min_volume))
+tickers <- setdiff(tickers, stop_tickers)
+print(paste("Тикеров для анализа: ", length(tickers)))
+
+sentiment <- select(sentiment, all_of(c('date', tickers)))
+quotes_spread <- quotes_spread[names(quotes_spread) %in% tickers]
+
+print(paste("Оставленные тикеры: ", toString(tickers)))
+```
+
+Удаляем промежуточные переменные
+
+```{r}
+rm(tickers_sent_2_and_more, tickers_listing_23, tickers_min_volume, tickers_quotes, tickers_sent)
+rm(securities_listing, securities_stats)
+```
+
+# Считаем статистики по сентименту в разрезе компаний
+
+```{r}
+sentiment_stats <- sapply(sentiment[-1], function(x) {
+  c(
+    count = sum(!is.na(x)),
+    min   = min(x, na.rm = TRUE),
+    max   = max(x, na.rm = TRUE),
+    mean  = mean(x, na.rm = TRUE),
+    median= median(x, na.rm = TRUE)
+  )
+}) |> t() |> as.data.frame()
+
+sentiment_stats[rownames(sentiment_stats) %in% tickers, ] |>
+  arrange(desc(count))
+
+openxlsx::write.xlsx(sentiment_stats, here("output", "tables", "sentiment_stats.xlsx"), rowNames = TRUE)
+```
+
+Удаляем промежуточные переменные
+
+```{r}
+rm(sentiment_stats)
+```
+
+# Подготавливаем данные
+
+## Собираем всё в один датафрейм
+
+```{r}
+sentiment_long_df <- sentiment |>
+  tidyr::pivot_longer(
+    cols = -date,
+    names_to = "ticker",
+    values_to = "sentiment_index"
+  ) |>
+  arrange(ticker, date)
+
+quotes_df <- bind_rows(quotes_spread, .id = "ticker") |>
+  arrange(ticker, date) |>
+  group_by(ticker) |>
+  mutate(
+    volume_rel = value / median(value, na.rm = TRUE),
+    volume_rel = ifelse(is.infinite(volume_rel) | is.na(volume_rel), 0, volume_rel)
+  ) |>
+  ungroup() |>
+  select(
+    ticker,
+    date,
+    ret,
+    volume_abs = value,
+    volume_rel,
+    spread = spread_bbo,
+  )
+
+market_params <- market_params |>
+  select(date, market_return = ret_moexbmi)
+  
+es_data <- quotes_df |>
+  left_join(market_params, by = "date") |>
+  full_join(sentiment_long_df, by = c("ticker", "date"))|>
+  filter(!is.na(ticker)) |>
+  filter(!if_all(c(ret, sentiment_index), is.na)) |>
+  arrange(ticker, date)
+```
+
+Пример подготовленных данных
+
+```{r}
+es_data |> tidyr::drop_na() |> head(10)
+```
+
+## Удаляем новости, которые ранее чем за 30 дней после начала торгов (чтобы успеть посчитать доходность на исторических данных)
+
+```{r}
+# Находим первую дату с доходностью для каждого тикера
+first_trade_date <- es_data |>
+  filter(!is.na(ret)) |>
+  group_by(ticker) |>
+  summarise(first_trade = min(date), .groups = "drop")
+
+# Удаляем слишком ранние новости
+es_data_clean <- es_data |>
+  left_join(first_trade_date, by = "ticker") |>
+  mutate(
+    # Помечаем строки для удаления: новость есть И она раньше (first_trade - 30 дней)
+    to_remove = !is.na(sentiment_index) & date < (first_trade + 30)
+  ) |>
+  filter(!to_remove) |>
+  select(-first_trade, -to_remove)
+
+cat("Строк до очистки:", nrow(es_data), "\n")
+cat("Строк после очистки:", nrow(es_data_clean), "\n")
+cat("Удалено строк:", nrow(es_data) - nrow(es_data_clean), "\n")
+
+es_data <- es_data_clean
+```
+
+Удаляем промежуточные переменные
+
+```{r}
+rm(es_data_clean)
+```
+
+## Удаляем строки где сентимент равен 0 и нет доходности
+
+```{r}
+es_data_clean <- es_data |>
+  filter(
+    # Оставляем строки, где ЕСТЬ доходность
+    !is.na(ret) |
+      # ИЛИ где есть значимая новость (даже если доходности пока нет)
+      (!is.na(sentiment_index) & sentiment_index != 0)
+  )
+
+cat("Строк до фильтрации:", nrow(es_data), "\n")
+cat("Строк после фильтрации:", nrow(es_data_clean), "\n")
+cat("Удалено строк:", nrow(es_data) - nrow(es_data_clean), "\n")
+
+es_data <- es_data_clean
+```
+
+Удаляем промежуточные переменные
+
+```{r}
+rm(es_data_clean)
+```
+
+## Проверка данных
+
+Общая статистика
+
+```{r}
+cat("Итого строк:", nrow(es_data), "\n")
+cat("Тикеров:", n_distinct(es_data$ticker), "\n")
+cat("Дней с сентиментом:", sum(!is.na(es_data$sentiment_index)), "\n")
+cat("Пропуски в market_return:", sum(is.na(es_data$market_return)), "\n")
+
+es_data_stats <- es_data |>
+  filter(!is.na(sentiment_index) & sentiment_index != 0) |>
+  summarise(
+    total_news = n(),
+    news_no_trade = sum(is.na(ret)),
+    pct_lost = round(100 * news_no_trade / total_news, 1)
+  )
+cat("\nВсего дней с новостями:", es_data_stats$total_news, "\n")
+cat("Дней с новостями без доходностей:", es_data_stats$news_no_trade, "\n")
+cat("Процент потерь:", es_data_stats$pct_lost, "%\n")
+```
+
+Пример данных
+
+```{r}
+es_data |>
+  filter(!is.na(es_data$ret) & !is.na(es_data$market_return) &
+           !is.na(es_data$sentiment_index) & es_data$sentiment_index != 0) |>
+  head(100)
+```
+
+Определяем ТОП-тикеров без доходностей, но с новостями
+
+```{r}
+news_noret <- es_data |>
+  group_by(ticker) |>
+  summarise(
+    news_no_trade = sum(!is.na(sentiment_index) & is.na(ret)),
+    total_news = sum(!is.na(sentiment_index)),
+    pct_problem = round(100 * news_no_trade / total_news, 1),
+    .groups = "drop"
+  ) |>
+  filter(news_no_trade > 0) |>
+  select(ticker, news_no_trade, total_news, pct_problem)
+
+news_noret |>
+  arrange(desc(news_no_trade )) |>
+  head(10)
+
+news_noret |>
+  arrange(desc(pct_problem)) |>
+  head(10)
+```
+
+# Анализ влияния
+
+## Разметка данных
+
+```{r}
+es_data <- es_data |>
+  mutate(
+    # Флаг события: абсолютное значение сентимента выше заданного в начале порога
+    is_event = abs(sentiment_index) >= threshold,
+    
+    # Знак события: позитив / негатив (для анализа асимметрии)
+    event_sign = case_when(
+      !is_event ~ NA_character_,
+      sentiment_index > 0 ~ "positive",
+      sentiment_index < 0 ~ "negative"
+    ),
+    
+    # Сила события
+    event_strength = if_else(is_event, abs(sentiment_index), NA_real_)
+  )
+
+es_data |>
+  summarise(
+    total_observations = n(),
+    total_events = sum(is_event, na.rm = TRUE),
+    events_positive = sum(event_sign == "positive", na.rm = TRUE),
+    events_negative = sum(event_sign == "negative", na.rm = TRUE),
+    events_per_ticker = round(total_events / n_distinct(ticker), 1),
+    pct_events = round(100 * total_events / total_observations, 2)
+  )
+```
+
+Визуализация
+
+```{r}
+es_data |>
+  filter(!is.na(sentiment_index)) |>
+  ggplot(aes(x = sentiment_index)) +
+  geom_histogram(bins = 50, fill = "steelblue", color = "white") +
+  geom_vline(xintercept = c(-threshold, threshold), color = "red", linetype = "dashed") +
+  labs(
+    title = "Распределение индекса сентимента",
+    subtitle = "Красные линии — порог события |sentiment| >= threshold",
+    x = "sentiment_index",
+    y = "Количество наблюдений"
+  ) +
+  theme_minimal()
+```
+
+## Посчёт абнормальных доходностей
+
+Функция расчета AR для одного события
+
+```{r}
+calc_ar_for_event <- function(data, ticker, event_date, est_window, event_window) {
+  
+  # 1. Окно оценки
+  est_start <- event_date + est_window[1]
+  est_end <- event_date + est_window[2]
+  
+  est_data <- data |>
+    filter(ticker == .env$ticker, 
+           date >= est_start, 
+           date <= est_end,
+           !is.na(ret), 
+           !is.na(market_return))
+  
+  # Если мало данных — возвращаем NULL
+  if (nrow(est_data) < min_est_obs) return(NULL)
+  
+  # 2. Оценка рыночной модели: R_stock = alpha + beta * R_market
+  model <- lm(ret ~ market_return, data = est_data)
+  alpha <- coef(model)[1]
+  beta <- coef(model)[2]
+  
+  # 3. Окно события
+  evt_start <- event_date + event_window[1]
+  evt_end <- event_date + event_window[2]
+  
+  evt_data <- data |>
+    filter(ticker == .env$ticker,
+           date >= evt_start,
+           date <= evt_end,
+           !is.na(ret),
+           !is.na(market_return))
+  
+  if (nrow(evt_data) == 0) return(NULL)
+  
+  # 4. Расчет AR
+  evt_data |>
+    mutate(
+      expected_ret = alpha + beta * market_return,
+      AR = ret - expected_ret,
+      rel_day = as.numeric(date - event_date),
+      event_id = paste0(ticker, "_", event_date)
+    ) |>
+    arrange(date) |>
+    select(event_id, ticker, date, rel_day, AR, sentiment_index)
+}
+```
+
+Применение ко всем событиям
+
+```{r}
+# 1. Таблица событий: только те строки, где is_event == TRUE
+events_table <- es_data |>
+  filter(is_event) |>
+  select(ticker, event_date = date, sentiment_index) |>
+  distinct()
+
+cat("Всего событий для обработки:", nrow(events_table), "\n")
+
+# 2. Применяем функцию к каждому событию
+# Используем lapply + bind_rows, так как функция может возвращать NULL
+ar_list <- lapply(seq_len(nrow(events_table)), function(i) {
+  row <- events_table[i, ]
+  calc_ar_for_event(
+    data = es_data,
+    ticker = row$ticker,
+    event_date = row$event_date,
+    est_window = est_window,
+    event_window = event_window
+  )
+})
+
+# 3. Объединяем результаты
+ar_results <- bind_rows(ar_list)
+
+# 4. Итоговая статистика
+cat("Успешно рассчитано AR для событий:", n_distinct(ar_results$event_id), "из", nrow(events_table), "\n")
+```
+
+Удаляем промежуточные переменные
+
+```{r}
+rm(events_table, ar_list)
+```
+
+# Результаты
+
+## Оценка AAR (Average Abnormal Return) по относительным дням
+
+```{r}
+aar_results <- ar_results |>
+  group_by(rel_day) |>
+  summarise(
+    AAR = mean(AR, na.rm = TRUE),
+    N = n(),
+    sd_AR = sd(AR, na.rm = TRUE),
+    se_AR = sd_AR / sqrt(N),  # Стандартная ошибка
+    t_stat = AAR / se_AR,     # t-статистика
+    p_value = 2 * pt(-abs(t_stat), df = N - 1),  # двусторонний p-value
+    .groups = "drop"
+  ) |>
+  mutate(
+    significant = p_value < 0.05,
+    significant_10 = p_value < 0.10
+  )
+
+print(aar_results, n = 10)
+```
+
+## Оценка CAAR (Cumulative AAR) — накопленный эффект
+
+```{r}
+caar_results <- aar_results |>
+  arrange(rel_day) |>
+  mutate(
+    CAAR = cumsum(AAR),
+    # Стандартная ошибка CAAR (упрощённо, без учёта автокорреляции)
+    se_CAAR = sqrt(cumsum(se_AR^2)),
+    t_stat_CAAR = CAAR / se_CAAR,
+    p_value_CAAR = 2 * pt(-abs(t_stat_CAAR), df = sum(N) - 1)
+  )
+
+print(caar_results, n = 10)
+```
+
+## График AAR с доверительными интервалами
+
+```{r}
+ggplot(aar_results, aes(x = rel_day, y = AAR)) +
+  geom_col(fill = "steelblue", alpha = threshold) +
+  geom_errorbar(aes(ymin = AAR - 1.96 * se_AR, ymax = AAR + 1.96 * se_AR), 
+                width = 0.2, color = "red") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "darkgreen") +
+  labs(
+    title = "Средняя аномальная доходность (AAR) вокруг события",
+    subtitle = "День 0 — дата события; красные линии — 95% ДИ",
+    x = "Относительный день",
+    y = "AAR"
+  ) +
+  theme_minimal()
+```
+
+## График CAAR
+
+```{r}
+ggplot(caar_results, aes(x = rel_day, y = CAAR)) +
+  geom_line(color = "darkblue", linewidth = 1) +
+  geom_point(color = "darkblue") +
+  geom_ribbon(aes(ymin = CAAR - 1.96 * se_CAAR, ymax = CAAR + 1.96 * se_CAAR), 
+              fill = "steelblue", alpha = 0.2) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "darkgreen") +
+  labs(
+    title = "Накопленная аномальная доходность (CAAR)",
+    subtitle = "Синяя область — 95% доверительный интервал",
+    x = "Относительный день",
+    y = "CAAR"
+  ) +
+  theme_minimal()
+```
+
+## Асимметрия — позитив vs негатив
+
+Добавляем знак события к AR
+
+```{r}
+ar_results_signed <- ar_results |>
+  left_join(
+    es_data |>
+      filter(is_event) |>
+      select(ticker, date, event_sign = event_sign),
+    by = c("ticker", "date")
+  )
+```
+
+## AAR отдельно для позитива и негатива
+
+```{r}
+aar_by_sign <- ar_results_signed |>
+  filter(!is.na(event_sign)) |>
+  group_by(rel_day, event_sign) |>
+  summarise(
+    AAR = mean(AR, na.rm = TRUE),
+    N = n(),
+    se_AR = sd(AR, na.rm = TRUE) / sqrt(N),
+    .groups = "drop"
+  )
+```
+
+## График AAR
+
+```{r}
+ggplot(aar_by_sign, aes(x = rel_day, y = AAR, color = event_sign)) +
+  geom_line(linewidth = 1) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_vline(xintercept = 0, linetype = "dotted") +
+  labs(
+    title = "AAR по знаку сентимента",
+    x = "Относительный день",
+    y = "AAR",
+    color = "Тип новости"
+  ) +
+  scale_color_manual(values = c("negative" = "red", "positive" = "green")) +
+  theme_minimal()
+```
+
+# Анализ кросс-корреляций
+
+```{r}
+
+check_lags <- es_data |>
+  arrange(ticker, date) |>
+  group_by(ticker) |>
+  mutate(
+    sent_lag1 = lag(sentiment_index, 1),  # Сентимент вчера
+    ret_lead1 = lead(ret, 1)              # Доходность завтра
+  ) |>
+  ungroup() |>
+  filter(!is.na(sentiment_index) & !is.na(ret))
+
+# Проверка корреляциий
+cor_matrix <- check_lags |>
+  summarise(
+    corr_sent_today_ret_today = cor(sentiment_index, ret, use = "complete.obs"),
+    corr_sent_yest_ret_today = cor(sent_lag1, ret, use = "complete.obs"),
+    corr_sent_today_ret_tomorrow = cor(sentiment_index, ret_lead1, use = "complete.obs")
+  )
+
+print(cor_matrix)
+```
+
+# Сохраняем отдельные переменные
+
+```{r}
+readr::write_rds(ar_results,
+                 here("data", "processed", "ar_results.rds"),
+                 compress = "gz")
+```
+
