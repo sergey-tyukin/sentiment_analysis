@@ -9,12 +9,24 @@ source(here("config", "api_key.R"))
 source(here("src", "functions", "algopack.R"))
 
 
-# Подгрузка готовых данных по сентименту ----
+# Подгрузка готовых данных по сентименту 1 ----
 
 sentiment <- read_excel(here("data", "raw", "Sent_2019-2025.xlsx"))
 sentiment$date <- as.Date(sentiment$date)
 readr::write_rds(sentiment,
                  here("data", "processed", "sentiment.rds"),
+                 compress = "gz")
+
+
+# Подгрузка готовых данных по сентименту 2 ----
+
+sentiment2 <- read_parquet(here("data", "raw", "sentiment.parquet")) |>
+  mutate(date = as.Date(date)) |>
+  pivot_wider(names_from = ticker, values_from = value) |>
+  filter(date >= as.Date("2019-01-01")) |>
+  arrange(date)
+readr::write_rds(sentiment2,
+                 here("data", "processed", "sentiment2.rds"),
                  compress = "gz")
 
 
