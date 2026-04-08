@@ -251,6 +251,94 @@ cat("Дней с новостями без доходностей:", es_data_sta
 cat("Процент потерь:", es_data_stats$pct_lost, "%\n")
 ```
 
+## Двигаем новости и снова проверяем 
+
+```{r}
+# === Функция: найти ближайший торговый день вперёд ===
+find_next_trade_date <- function(target_date, ticker, data) {
+  trade_dates <- data |>
+    filter(ticker == .env$ticker, !is.na(ret), !is.na(market_return)) |>
+    pull(date) |>
+    unique() |>
+    sort()
+  
+  if (target_date %in% trade_dates) return(target_date)
+  
+  future <- trade_dates[trade_dates > target_date]
+  if (length(future) == 0) return(NA)
+  
+  return(min(future))
+}
+
+# === Шаг 1: Создаём таблицу новостей со сдвинутыми датами ===
+# ВАЖНО: тот же фильтр, что и в статистике (!= 0)
+news_shifted <- es_data |>
+  filter(!is.na(sentiment_index) & sentiment_index != 0) |>
+  select(ticker, date, sentiment_index) |>
+  distinct() |>
+  rowwise() |>
+  mutate(
+    date_adj = find_next_trade_date(date, ticker, es_data)
+  ) |>
+  ungroup() |>
+  filter(!is.na(date_adj))
+
+# === Шаг 2: Агрегируем, если несколько новостей на один день ===
+news_aggregated <- news_shifted |>
+  group_by(ticker, date_adj) |>
+  summarise(
+    sentiment_index = sum(sentiment_index),
+    .groups = "drop"
+  ) |>
+  # Убираем те, что стали 0 после суммирования
+  filter(sentiment_index != 0)
+
+# === Шаг 3: Присоединяем к исходным данным ===
+es_data_adj <- es_data |>
+  select(-sentiment_index) |>
+  left_join(
+    news_aggregated |> select(ticker, date = date_adj, sentiment_index),
+    by = c("ticker", "date")
+  )
+
+# === Шаг 4: Статистика до и после ===
+cat("=== es_data (до) ===\n")
+es_data_stats <- es_data |>
+  filter(!is.na(sentiment_index) & sentiment_index != 0) |>
+  summarise(
+    total_news = n(),
+    news_no_trade = sum(is.na(ret)),
+    pct_lost = round(100 * news_no_trade / total_news, 1)
+  )
+cat("Всего дней с новостями:", es_data_stats$total_news, "\n")
+cat("Дней с новостями без доходностей:", es_data_stats$news_no_trade, "\n")
+cat("Процент потерь:", es_data_stats$pct_lost, "%\n")
+
+
+cat("\n=== es_data_adj (после) ===\n")
+es_data_adj_stats <- es_data_adj |>
+  filter(!is.na(sentiment_index) & sentiment_index != 0) |>
+  summarise(
+    total_news = n(),
+    news_no_trade = sum(is.na(ret)),
+    pct_lost = round(100 * news_no_trade / total_news, 1)
+  )
+cat("Всего дней с новостями:", es_data_adj_stats$total_news, "\n")
+cat("Дней с новостями без доходностей:", es_data_adj_stats$news_no_trade, "\n")
+cat("Процент потерь:", es_data_adj_stats$pct_lost, "%\n")
+
+
+cat("\n=== Проверка агрегации ===\n")
+cat("Новостей до сдвига:", es_data_stats$total_news, "\n")
+cat("Новостей после сдвига (до агрегации):", nrow(news_shifted), "\n")
+cat("Новостей после агрегации:", nrow(news_aggregated), "\n")
+cat("Потеряно при агрегации (стали 0):", nrow(news_shifted) - nrow(news_aggregated), "\n")
+```
+
+
+
+
+
 Пример данных
 
 ```{r}
@@ -332,7 +420,7 @@ es_data |>
   theme_minimal()
 ```
 
-## Посчёт абнормальных доходностей
+## Посчёт аномальных доходностей
 
 Функция расчета AR для одного события
 
@@ -421,58 +509,73 @@ cat("Успешно рассчитано AR для событий:", n_distinct(
 rm(events_table, ar_list)
 ```
 
-# Результаты
+# Результаты без учёта направления
 
-## Оценка AAR (Average Abnormal Return) по относительным дням
+## Оценка AAR
 
 ```{r}
-aar_results <- ar_results |>
+aar_results_ttl <- ar_results |>
+  mutate(
+    event_sign = case_when(
+      sentiment_index > 0 ~ "positive",
+      sentiment_index < 0 ~ "negative",
+      TRUE ~ NA_character_
+    ),
+    AR_adjusted = if_else(event_sign == "negative", -AR, AR)
+  ) |>
+  filter(!is.na(event_sign)) |>
   group_by(rel_day) |>
   summarise(
-    AAR = mean(AR, na.rm = TRUE),
     N = n(),
-    sd_AR = sd(AR, na.rm = TRUE),
-    se_AR = sd_AR / sqrt(N),  # Стандартная ошибка
-    t_stat = AAR / se_AR,     # t-статистика
-    p_value = 2 * pt(-abs(t_stat), df = N - 1),  # двусторонний p-value
+    AAR = mean(AR_adjusted, na.rm = TRUE),
+    sd_AR = sd(AR_adjusted, na.rm = TRUE),
+    se_AR = sd_AR / sqrt(N),
+    t_stat = AAR / se_AR,
     .groups = "drop"
   ) |>
   mutate(
-    significant = p_value < 0.05,
-    significant_10 = p_value < 0.10
-  )
+    p_value = 1 - pt(abs(t_stat), df = N - 1),
+    significant_AAR = p_value < 0.05
+  ) |>
+  arrange(rel_day)
 
-print(aar_results, n = 10)
+print(aar_results_ttl)
+
 ```
 
-## Оценка CAAR (Cumulative AAR) — накопленный эффект
+## Оценка CAAR
 
 ```{r}
-caar_results <- aar_results |>
+caar_results_ttl <- aar_results_ttl |>
   arrange(rel_day) |>
   mutate(
     CAAR = cumsum(AAR),
-    # Стандартная ошибка CAAR (упрощённо, без учёта автокорреляции)
     se_CAAR = sqrt(cumsum(se_AR^2)),
-    t_stat_CAAR = CAAR / se_CAAR,
-    p_value_CAAR = 2 * pt(-abs(t_stat_CAAR), df = sum(N) - 1)
+    t_stat_CAAR = CAAR / se_CAAR
   )
 
-print(caar_results, n = 10)
+caar_results_ttl <- caar_results_ttl |>
+  mutate(
+    p_value_CAAR = 2 * (1 - pt(abs(t_stat_CAAR), df = sum(N) - 1)),
+    significant_CAAR = p_value_CAAR < 0.05
+  )
+
+print(caar_results_ttl |> select(rel_day, N, AAR, CAAR, se_CAAR, t_stat_CAAR, p_value_CAAR, significant_CAAR))
 ```
 
-## График AAR с доверительными интервалами
+## График AAR
 
 ```{r}
-ggplot(aar_results, aes(x = rel_day, y = AAR)) +
-  geom_col(fill = "steelblue", alpha = threshold) +
-  geom_errorbar(aes(ymin = AAR - 1.96 * se_AR, ymax = AAR + 1.96 * se_AR), 
-                width = 0.2, color = "red") +
+ggplot(caar_results_ttl,
+       aes(x = rel_day, y = AAR)) +
+  geom_col(fill = "blue", alpha = 0.7) +
+  geom_errorbar(aes(ymin = AAR - 1.96 * se_AR, ymax = AAR + 1.96 * se_AR),
+                width = 0.2, color = "darkblue") +
   geom_hline(yintercept = 0, linetype = "dashed") +
-  geom_vline(xintercept = 0, linetype = "dotted", color = "darkgreen") +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "navy") +
   labs(
-    title = "Средняя аномальная доходность (AAR) вокруг события",
-    subtitle = "День 0 — дата события; красные линии — 95% ДИ",
+    title = "AAR: Все события",
+    subtitle = "День 0 — дата события; синие линии — 95% доверительный интервал",
     x = "Относительный день",
     y = "AAR"
   ) +
@@ -482,16 +585,156 @@ ggplot(aar_results, aes(x = rel_day, y = AAR)) +
 ## График CAAR
 
 ```{r}
-ggplot(caar_results, aes(x = rel_day, y = CAAR)) +
-  geom_line(color = "darkblue", linewidth = 1) +
-  geom_point(color = "darkblue") +
-  geom_ribbon(aes(ymin = CAAR - 1.96 * se_CAAR, ymax = CAAR + 1.96 * se_CAAR), 
-              fill = "steelblue", alpha = 0.2) +
+ggplot(caar_results_ttl,
+       aes(x = rel_day, y = CAAR)) +
+  geom_line(color = "blue", linewidth = 1) +
+  geom_point(color = "blue") +
+  geom_ribbon(aes(ymin = CAAR - 1.96 * se_CAAR, ymax = CAAR + 1.96 * se_CAAR),
+              fill = "lightblue", alpha = 0.3) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "navy") +
+  labs(
+    title = "CAAR: Все события",
+    subtitle = "Синяя область — 95% доверительный интервал",
+    x = "Относительный день",
+    y = "CAAR"
+  ) +
+  theme_minimal()
+
+```
+
+# Результаты с учётом направления
+
+## Оценка AAR
+
+```{r}
+aar_results <- ar_results |>
+  mutate(
+    event_sign = case_when(
+      sentiment_index > 0 ~ "positive",
+      sentiment_index < 0 ~ "negative",
+      TRUE ~ NA_character_
+    )
+  ) |>
+  filter(!is.na(event_sign)) |>
+  group_by(event_sign, rel_day) |>
+  summarise(
+    N = n(),
+    AAR = mean(AR, na.rm = TRUE),
+    sd_AR = sd(AR, na.rm = TRUE),
+    se_AR = sd_AR / sqrt(N),
+    t_stat = AAR / se_AR,
+    .groups = "drop"
+  )
+
+aar_results <- aar_results |>
+  mutate(
+    p_value = if_else(event_sign == "positive",
+                      pt(-t_stat, df = N - 1),
+                      pt(t_stat, df = N - 1)),
+    significant_AAR = p_value < 0.05
+  ) |>
+  arrange(event_sign, rel_day)
+
+print(aar_results)
+```
+
+## Оценка CAAR
+
+```{r}
+caar_results <- aar_results |>
+  arrange(event_sign, rel_day) |>
+  group_by(event_sign) |>
+  mutate(
+    CAAR = cumsum(AAR),
+    se_CAAR = sqrt(cumsum(se_AR^2)),
+    t_stat_CAAR = CAAR / se_CAAR
+  ) |>
+  ungroup()
+
+caar_results <- caar_results |>
+  mutate(
+    p_value_CAAR = if_else(event_sign == "positive",
+                           pt(-t_stat_CAAR, df = sum(N) - 1),
+                           pt(t_stat_CAAR, df = sum(N) - 1)),
+    significant_CAAR = p_value_CAAR < 0.05
+  )
+
+print(caar_results |> select(event_sign, rel_day, N, AAR, CAAR, se_CAAR, t_stat_CAAR, p_value_CAAR, significant_CAAR))
+```
+
+## График AAR для позитивных новостей
+
+```{r}
+ggplot(aar_results |> filter(event_sign == "positive"), 
+       aes(x = rel_day, y = AAR)) +
+  geom_col(fill = "forestgreen", alpha = 0.7) +
+  geom_errorbar(aes(ymin = AAR - 1.96 * se_AR, ymax = AAR + 1.96 * se_AR), 
+                width = 0.2, color = "red") +
   geom_hline(yintercept = 0, linetype = "dashed") +
   geom_vline(xintercept = 0, linetype = "dotted", color = "darkgreen") +
   labs(
-    title = "Накопленная аномальная доходность (CAAR)",
-    subtitle = "Синяя область — 95% доверительный интервал",
+    title = "AAR: Позитивные новости",
+    subtitle = "День 0 — дата события; красные линии — 95% ДИ",
+    x = "Относительный день",
+    y = "AAR"
+  ) +
+  theme_minimal()
+```
+
+## График AAR для негативных новостей
+
+```{r}
+ggplot(aar_results |> filter(event_sign == "negative"), 
+       aes(x = rel_day, y = AAR)) +
+  geom_col(fill = "tomato", alpha = 0.7) +
+  geom_errorbar(aes(ymin = AAR - 1.96 * se_AR, ymax = AAR + 1.96 * se_AR), 
+                width = 0.2, color = "red") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "darkgreen") +
+  labs(
+    title = "AAR: Негативные новости",
+    subtitle = "День 0 — дата события; красные линии — 95% ДИ",
+    x = "Относительный день",
+    y = "AAR"
+  ) +
+  theme_minimal()
+```
+
+## График CAAR для позитивных новостей
+
+```{r}
+ggplot(caar_results |> filter(event_sign == "positive"), 
+       aes(x = rel_day, y = CAAR)) +
+  geom_line(color = "forestgreen", linewidth = 1) +
+  geom_point(color = "forestgreen") +
+  geom_ribbon(aes(ymin = CAAR - 1.96 * se_CAAR, ymax = CAAR + 1.96 * se_CAAR), 
+              fill = "lightgreen", alpha = 0.2) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "darkgreen") +
+  labs(
+    title = "CAAR: Позитивные новости",
+    subtitle = "Зелёная область — 95% доверительный интервал",
+    x = "Относительный день",
+    y = "CAAR"
+  ) +
+  theme_minimal()
+```
+
+## График CAAR для негативных новостей
+
+```{r}
+ggplot(caar_results |> filter(event_sign == "negative"), 
+       aes(x = rel_day, y = CAAR)) +
+  geom_line(color = "tomato", linewidth = 1) +
+  geom_point(color = "tomato") +
+  geom_ribbon(aes(ymin = CAAR - 1.96 * se_CAAR, ymax = CAAR + 1.96 * se_CAAR), 
+              fill = "mistyrose", alpha = 0.2) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "darkgreen") +
+  labs(
+    title = "CAAR: Негативные новости",
+    subtitle = "Красная область — 95% доверительный интервал",
     x = "Относительный день",
     y = "CAAR"
   ) +
@@ -517,6 +760,10 @@ ar_results_signed <- ar_results |>
 ```{r}
 aar_by_sign <- ar_results_signed |>
   filter(!is.na(event_sign)) |>
+  mutate(
+    # Инвертируем AR для негатива: прибыль от шорта = -AR
+    AR = if_else(event_sign == "negative", -AR, AR)
+  ) |>
   group_by(rel_day, event_sign) |>
   summarise(
     AAR = mean(AR, na.rm = TRUE),
@@ -567,6 +814,94 @@ cor_matrix <- check_lags |>
   )
 
 print(cor_matrix)
+```
+
+# Расчёт стратегии
+
+```{r}
+# === Стратегический анализ: на уровне индивидуальных AR ===
+ar_results_strat <- ar_results |>
+  mutate(
+    event_sign = case_when(
+      sentiment_index > 0 ~ "positive",
+      sentiment_index < 0 ~ "negative",
+      TRUE ~ NA_character_
+    ),
+    # Инвертируем негатив: прибыль от шорта
+    AR_strat = if_else(event_sign == "negative", -AR, AR)
+  ) |>
+  filter(!is.na(event_sign))
+
+# Агрегация по дням
+aar_strategy <- ar_results_strat |>
+  group_by(rel_day) |>
+  summarise(
+    N = n(),
+    AAR_strat = mean(AR_strat, na.rm = TRUE),
+    sd_strat = sd(AR_strat, na.rm = TRUE),
+    se_strat = sd_strat / sqrt(N),
+    t_stat = AAR_strat / se_strat,
+    # Односторонний тест: стратегия прибыльна (> 0)
+    p_value = pt(-t_stat, df = N - 1),
+    .groups = "drop"
+  ) |>
+  mutate(
+    significant = p_value < 0.05
+  )
+
+print(aar_strategy)
+```
+
+```{r}
+# Визуализация
+ggplot(aar_strategy |> filter(rel_day >= 0, AAR_strat > 0), aes(x = rel_day, y = AAR_strat)) +
+  geom_col(fill = "gold3", alpha = 0.7) +
+  geom_errorbar(aes(ymin = AAR_strat - 1.96 * se_strat, 
+                    ymax = AAR_strat + 1.96 * se_strat), 
+                width = 0.2, color = "red") +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "darkgreen") +
+  labs(
+    title = "Доходность стратегии 'Покупай на позитиве, продавай на негативе'",
+    subtitle = "Золотые столбцы — средняя прибыль за день; красные линии — 95% ДИ",
+    x = "Относительный день",
+    y = "Стратегическая AAR"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+# === CAAR стратегии: накопление с дня 0 ===
+caar_strategy <- aar_strategy |>
+  filter(rel_day >= 0) |>
+  arrange(rel_day) |>
+  mutate(
+    CAAR_strat = cumsum(AAR_strat),
+    se_CAAR = sqrt(cumsum(se_strat^2)),
+    t_stat_CAAR = CAAR_strat / se_CAAR,
+    p_value_CAAR = pt(-t_stat_CAAR, df = sum(N) - 1),
+    significant = p_value_CAAR < 0.05
+  )
+
+caar_strategy
+```
+
+```{r}
+ggplot(caar_strategy |> filter(AAR_strat > 0), aes(x = rel_day, y = CAAR_strat)) +
+  geom_line(color = "darkgreen", linewidth = 1) +
+  geom_point(color = "darkgreen") +
+  geom_ribbon(aes(ymin = CAAR_strat - 1.96 * se_CAAR, 
+                  ymax = CAAR_strat + 1.96 * se_CAAR), 
+              fill = "lightgreen", alpha = 0.2) +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "darkgreen") +
+  labs(
+    title = "Накопленная доходность стратегии (вход в день 0)",
+    subtitle = "Покупка при позитиве / шорт при негативе; зелёная область — 95% ДИ",
+    x = "Дней после входа в позицию",
+    y = "CAAR стратегии"
+  ) +
+  theme_minimal()
 ```
 
 # Сохраняем отдельные переменные
