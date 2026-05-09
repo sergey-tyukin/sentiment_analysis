@@ -37,7 +37,7 @@ event_window <- c(-3, 6)  # размер окна события
 
 ```
 
-## Загрузка информаци
+## Загрузка информации
 
 ```{r}
 # Загружаем сентимент
@@ -46,7 +46,7 @@ sentiment <- readr::read_rds(here("data", "processed", "sentiment2.rds"))
 # Загружаем уровни листинга
 securities_listing <- readr::read_rds(here("data", "processed", "securities_listing.rds"))
 
-# Загружаем котировки, объемы и спред
+# Загружаем котировки, объёмы и спред
 quotes_spread <- readr::read_rds(here("data", "processed", "quotes_spread.rds"))
 
 # Загружаем статистику по акциям
@@ -69,7 +69,7 @@ tickers_sent_2_and_more <- names(sentiment |>
       min(.x, na.rm = T) < -threshold)
     )
   )
-print(paste("Тикеров фигурировало хотя бы в двух сообщениях: ", length(tickers_sent)))
+print(paste("Тикеров фигурировало хотя бы в двух сообщениях: ", length(tickers_sent_2_and_more)))
 
 tickers_quotes <- names(quotes_spread)
 print(paste("Тикеров имеют котировки: ", length(tickers_quotes)))
@@ -82,7 +82,7 @@ print(paste("Тикеров 2 и 3 уровня листинга: ", length(tick
 tickers_min_volume <- securities_stats |>
   filter(value_share <= 0.005) |>
   pull(ticker)
-print(paste("Тикеров с объемом торгов до 0,5% от биржевого: ", length(tickers_min_volume)))
+print(paste("Тикеров с объёмом торгов до 0,5% от биржевого: ", length(tickers_min_volume)))
 
 tickers <- Reduce(intersect, list(tickers_sent, tickers_sent_2_and_more, tickers_quotes, tickers_listing_23, tickers_min_volume))
 tickers <- setdiff(tickers, stop_tickers)
@@ -246,15 +246,15 @@ es_data_stats <- es_data |>
     news_no_trade = sum(is.na(ret)),
     pct_lost = round(100 * news_no_trade / total_news, 1)
   )
-cat("\nВсего дней с новостями:", es_data_stats$total_news, "\n")
-cat("Дней с новостями без доходностей:", es_data_stats$news_no_trade, "\n")
+cat("\nВсего дней с новостями для анализа:", es_data_stats$total_news, "\n")
+cat("Из них - дней с новостями без доходностей:", es_data_stats$news_no_trade, "\n")
 cat("Процент потерь:", es_data_stats$pct_lost, "%\n")
 ```
 
 ## Двигаем новости и снова проверяем 
 
 ```{r}
-# === Функция: найти ближайший торговый день вперёд ===
+# Ищем ближайший будущий торговый день
 find_next_trade_date <- function(target_date, ticker, data) {
   trade_dates <- data |>
     filter(ticker == .env$ticker, !is.na(ret), !is.na(market_return)) |>
@@ -270,8 +270,7 @@ find_next_trade_date <- function(target_date, ticker, data) {
   return(min(future))
 }
 
-# === Шаг 1: Создаём таблицу новостей со сдвинутыми датами ===
-# ВАЖНО: тот же фильтр, что и в статистике (!= 0)
+# 1. Создаём таблицу новостей со сдвинутыми датами
 news_shifted <- es_data |>
   filter(!is.na(sentiment_index) & sentiment_index != 0) |>
   select(ticker, date, sentiment_index) |>
@@ -283,7 +282,7 @@ news_shifted <- es_data |>
   ungroup() |>
   filter(!is.na(date_adj))
 
-# === Шаг 2: Агрегируем, если несколько новостей на один день ===
+# 2. Агрегируем, если несколько новостей на один день
 news_aggregated <- news_shifted |>
   group_by(ticker, date_adj) |>
   summarise(
@@ -293,7 +292,7 @@ news_aggregated <- news_shifted |>
   # Убираем те, что стали 0 после суммирования
   filter(sentiment_index != 0)
 
-# === Шаг 3: Присоединяем к исходным данным ===
+# 3. Присоединяем к исходным данным
 es_data_adj <- es_data |>
   select(-sentiment_index) |>
   left_join(
@@ -301,7 +300,7 @@ es_data_adj <- es_data |>
     by = c("ticker", "date")
   )
 
-# === Шаг 4: Статистика до и после ===
+# 4. Статистика до и после
 cat("=== es_data (до) ===\n")
 es_data_stats <- es_data |>
   filter(!is.na(sentiment_index) & sentiment_index != 0) |>
@@ -334,10 +333,6 @@ cat("Новостей после сдвига (до агрегации):", nrow(
 cat("Новостей после агрегации:", nrow(news_aggregated), "\n")
 cat("Потеряно при агрегации (стали 0):", nrow(news_shifted) - nrow(news_aggregated), "\n")
 ```
-
-
-
-
 
 Пример данных
 
@@ -403,6 +398,73 @@ es_data |>
   )
 ```
 
+Сдвиг событий с неторговых дней
+
+```{r}
+# 1. Находим события на неторговых днях (где ret = NA)
+events_to_shift <- es_data |>
+  filter(is_event == TRUE, is.na(ret)) |>
+  select(ticker, event_date = date, sentiment_index, event_sign, event_strength)
+
+cat("Событий на неторговых днях:", nrow(events_to_shift), "\n")
+
+# 2. Функция: найти следующий торговый день
+find_next_trade_date <- function(target_date, ticker, data) {
+  trade_dates <- data |>
+    filter(ticker == .env$ticker, !is.na(ret), !is.na(market_return)) |>
+    pull(date) |>
+    unique() |>
+    sort()
+  
+  future <- trade_dates[trade_dates > target_date]  # > чтобы найти именно следующий
+  if (length(future) == 0) return(NA)
+  
+  return(min(future))
+}
+
+# 3. Сдвигаем даты на следующий торговый день
+events_shifted <- events_to_shift |>
+  rowwise() |>
+  mutate(
+    event_date_new = find_next_trade_date(event_date, ticker, es_data)
+  ) |>
+  ungroup() |>
+  filter(!is.na(event_date_new))
+
+cat("Событий успешно сдвинуто:", nrow(events_shifted), "\n")
+
+# 4. Удаляем старые события из es_data
+es_data <- es_data |>
+  filter(!(is_event == TRUE & is.na(ret)))
+
+# 5. Добавляем сдвинутые события в es_data
+# Для этого находим строки с новыми датами и заполняем поля событий
+for (i in seq_len(nrow(events_shifted))) {
+  row <- events_shifted[i, ]
+  
+  es_data <- es_data |>
+    mutate(
+      is_event = if_else(ticker == row$ticker & date == row$event_date_new, TRUE, is_event),
+      sentiment_index = if_else(ticker == row$ticker & date == row$event_date_new, 
+                                row$sentiment_index, sentiment_index),
+      event_sign = if_else(ticker == row$ticker & date == row$event_date_new, 
+                           row$event_sign, event_sign),
+      event_strength = if_else(ticker == row$ticker & date == row$event_date_new, 
+                               row$event_strength, event_strength)
+    )
+}
+
+cat("Строк в es_data после сдвига:", nrow(es_data), "\n")
+cat("Всего событий после сдвига:", sum(es_data$is_event, na.rm = TRUE), "\n")
+
+# 6. Проверка: событий на неторговых днях больше нет
+check <- es_data |>
+  filter(is_event == TRUE, is.na(ret)) |>
+  nrow()
+
+cat("Осталось событий на неторговых днях:", check, "\n")
+```
+
 Визуализация
 
 ```{r}
@@ -420,14 +482,14 @@ es_data |>
   theme_minimal()
 ```
 
-## Посчёт аномальных доходностей
+## Подсчёт аномальных доходностей
 
 Функция расчета AR для одного события
 
 ```{r}
 calc_ar_for_event <- function(data, ticker, event_date, est_window, event_window) {
   
-  # 1. Окно оценки
+  # Окно оценки
   est_start <- event_date + est_window[1]
   est_end <- event_date + est_window[2]
   
@@ -441,14 +503,14 @@ calc_ar_for_event <- function(data, ticker, event_date, est_window, event_window
   # Если мало данных — возвращаем NULL
   if (nrow(est_data) < min_est_obs) return(NULL)
   
-  # 2. Оценка рыночной модели: R_stock = alpha + beta * R_market
+  # Оценка рыночной модели
   model <- lm(ret ~ market_return, data = est_data)
   alpha <- coef(model)[1]
   beta <- coef(model)[2]
   
-  # 3. Окно события
-  evt_start <- event_date + event_window[1]
-  evt_end <- event_date + event_window[2]
+  # Окно события
+  evt_start <- event_date - 10
+  evt_end <- event_date + 20
   
   evt_data <- data |>
     filter(ticker == .env$ticker,
@@ -459,7 +521,7 @@ calc_ar_for_event <- function(data, ticker, event_date, est_window, event_window
   
   if (nrow(evt_data) == 0) return(NULL)
   
-  # 4. Расчет AR
+  # Расчет AR
   evt_data |>
     mutate(
       expected_ret = alpha + beta * market_return,
@@ -472,10 +534,10 @@ calc_ar_for_event <- function(data, ticker, event_date, est_window, event_window
 }
 ```
 
-Применение ко всем событиям
+Собираем все данные в одном датафрейме
 
 ```{r}
-# 1. Таблица событий: только те строки, где is_event == TRUE
+# Таблица событий: только те строки, где is_event == TRUE
 events_table <- es_data |>
   filter(is_event) |>
   select(ticker, event_date = date, sentiment_index) |>
@@ -483,8 +545,7 @@ events_table <- es_data |>
 
 cat("Всего событий для обработки:", nrow(events_table), "\n")
 
-# 2. Применяем функцию к каждому событию
-# Используем lapply + bind_rows, так как функция может возвращать NULL
+# Применяем функцию к каждому событию
 ar_list <- lapply(seq_len(nrow(events_table)), function(i) {
   row <- events_table[i, ]
   calc_ar_for_event(
@@ -496,10 +557,68 @@ ar_list <- lapply(seq_len(nrow(events_table)), function(i) {
   )
 })
 
-# 3. Объединяем результаты
+# Объединяем результаты
 ar_results <- bind_rows(ar_list)
+ar_results <- ar_results |>
+  mutate(
+    sentiment_index = if_else(rel_day == 0, sentiment_index, NA_real_)
+  )
+cat("Строк до пересчёта rel_day:", nrow(ar_results), "\n")
+```
 
-# 4. Итоговая статистика
+Сдвигаем события, которые попадают на выходной день
+
+```{R}
+# Удаляем события, где нет торгового дня в дату события
+# Находим event_id, у которых отсутствует rel_day == 0
+events_without_day0 <- ar_results |>
+  group_by(event_id) |>
+  filter(!any(rel_day == 0)) |>
+  ungroup() |>
+  distinct(event_id) |>
+  pull(event_id)
+
+cat("Событий без торгового дня в дату события:", length(events_without_day0), "\n")
+
+# Фильтруем их из ar_results
+ar_results <- ar_results |>
+  filter(!event_id %in% events_without_day0)
+
+cat("Строк после фильтрации:", nrow(ar_results), "\n")
+```
+
+
+Восстанавливаем корректную нумерацию
+
+```{R}
+# 1. Пересчёт rel_day по торговым дням
+# Пересчитываем rel_day для каждого события отдельно
+ar_results <- ar_results |>
+  group_by(event_id) |>
+  arrange(date, .by_group = TRUE) |>
+  mutate(
+    # Находим позицию дня события (rel_day == 0 в исходных данных)
+    event_pos = which(rel_day == 0),
+    # Пересчитываем: порядковый номер минус позиция события
+    rel_day_trading = row_number() - event_pos
+  ) |>
+  ungroup()
+
+# Проверяем, что пересчёт прошёл корректно
+cat("Уникальных event_id:", n_distinct(ar_results$event_id), "\n")
+cat("Диапазон rel_day_trading:", min(ar_results$rel_day_trading), "до", max(ar_results$rel_day_trading), "\n")
+
+# 2. Отрезаем до нужного окна [-3; +6] по новой нумерации
+ar_results <- ar_results |>
+  filter(rel_day_trading >= -3 & rel_day_trading <= 6) |>
+  mutate(
+    rel_day = rel_day_trading  # Переписываем старую колонку
+  ) |>
+  select(-rel_day_trading)
+
+cat("Строк после фильтрации окна:", nrow(ar_results), "\n")
+
+# 3. Итоговая статистика
 cat("Успешно рассчитано AR для событий:", n_distinct(ar_results$event_id), "из", nrow(events_table), "\n")
 ```
 
@@ -515,15 +634,20 @@ rm(events_table, ar_list)
 
 ```{r}
 aar_results_ttl <- ar_results |>
+  group_by(event_id) |>
   mutate(
     event_sign = case_when(
       sentiment_index > 0 ~ "positive",
       sentiment_index < 0 ~ "negative",
       TRUE ~ NA_character_
     ),
+    event_sign = event_sign[which(!is.na(event_sign))[1]]
+  ) |>
+  ungroup() |>
+  filter(!is.na(event_sign)) |>
+  mutate(
     AR_adjusted = if_else(event_sign == "negative", -AR, AR)
   ) |>
-  filter(!is.na(event_sign)) |>
   group_by(rel_day) |>
   summarise(
     N = n(),
@@ -609,13 +733,16 @@ ggplot(caar_results_ttl,
 
 ```{r}
 aar_results <- ar_results |>
+  group_by(event_id) |>
   mutate(
     event_sign = case_when(
       sentiment_index > 0 ~ "positive",
       sentiment_index < 0 ~ "negative",
       TRUE ~ NA_character_
-    )
+    ),
+    event_sign = event_sign[which(!is.na(event_sign))[1]]
   ) |>
+  ungroup() |>
   filter(!is.na(event_sign)) |>
   group_by(event_sign, rel_day) |>
   summarise(
@@ -799,8 +926,8 @@ check_lags <- es_data |>
   arrange(ticker, date) |>
   group_by(ticker) |>
   mutate(
-    sent_lag1 = lag(sentiment_index, 1),  # Сентимент вчера
-    ret_lead1 = lead(ret, 1)              # Доходность завтра
+    sent_lag1 = lag(sentiment_index, 1),
+    ret_lead1 = lead(ret, 1)
   ) |>
   ungroup() |>
   filter(!is.na(sentiment_index) & !is.na(ret))
@@ -819,21 +946,27 @@ print(cor_matrix)
 # Расчёт стратегии
 
 ```{r}
-# === Стратегический анализ: на уровне индивидуальных AR ===
+# Подготовка данных
 ar_results_strat <- ar_results |>
+  group_by(event_id) |>
   mutate(
     event_sign = case_when(
       sentiment_index > 0 ~ "positive",
       sentiment_index < 0 ~ "negative",
       TRUE ~ NA_character_
     ),
-    # Инвертируем негатив: прибыль от шорта
+    event_sign = event_sign[which(!is.na(event_sign))[1]],
     AR_strat = if_else(event_sign == "negative", -AR, AR)
   ) |>
+  ungroup() |>
   filter(!is.na(event_sign))
 
-# Агрегация по дням
-aar_strategy <- ar_results_strat |>
+# 1. Таблица по дням
+aar_strategy_by_day <- ar_results_strat |>
+  filter(
+    (event_sign == "positive" & rel_day == 0) |
+    (event_sign == "negative" & rel_day %in% c(1, 2))
+  ) |>
   group_by(rel_day) |>
   summarise(
     N = n(),
@@ -841,67 +974,109 @@ aar_strategy <- ar_results_strat |>
     sd_strat = sd(AR_strat, na.rm = TRUE),
     se_strat = sd_strat / sqrt(N),
     t_stat = AAR_strat / se_strat,
-    # Односторонний тест: стратегия прибыльна (> 0)
     p_value = pt(-t_stat, df = N - 1),
+    significant = p_value < 0.05,
     .groups = "drop"
+  )
+
+print(aar_strategy_by_day)
+```
+
+Итог стратегии
+
+```{r}
+# 2. Кумулятивная доходность на событие с асимметричным окном
+caar_per_event <- ar_results_strat |>
+  filter(
+    (event_sign == "positive" & rel_day == 0) |
+    (event_sign == "negative" & rel_day %in% c(1, 2))
   ) |>
-  mutate(
+  group_by(event_id) |>
+  summarise(
+    CAAR_event = sum(AR_strat),
+    .groups = "drop"
+  )
+
+# 3. Общий результат стратегии
+strategy_result <- caar_per_event |>
+  summarise(
+    N = n(),
+    CAAR = mean(CAAR_event),
+    sd_CAAR = sd(CAAR_event),
+    se_CAAR = sd_CAAR / sqrt(N),
+    t_stat = CAAR / se_CAAR,
+    p_value = pt(-t_stat, df = N - 1),
     significant = p_value < 0.05
   )
 
-print(aar_strategy)
+print(strategy_result)
 ```
 
 ```{r}
-# Визуализация
-ggplot(aar_strategy |> filter(rel_day >= 0, AAR_strat > 0), aes(x = rel_day, y = AAR_strat)) +
-  geom_col(fill = "gold3", alpha = 0.7) +
+# Визуализация стратегии по дням
+ggplot(aar_strategy_by_day, aes(x = rel_day, y = AAR_strat)) +
+  geom_col(aes(fill = significant), alpha = 0.7) +
+  scale_fill_manual(values = c("TRUE" = "gold3", "FALSE" = "gray70"), guide = "none") +
   geom_errorbar(aes(ymin = AAR_strat - 1.96 * se_strat, 
                     ymax = AAR_strat + 1.96 * se_strat), 
                 width = 0.2, color = "red") +
   geom_hline(yintercept = 0, linetype = "dashed") +
   geom_vline(xintercept = 0, linetype = "dotted", color = "darkgreen") +
+  scale_x_continuous(breaks = c(0, 1, 2), 
+                     labels = c("0\n(позитив)", "1\n(негатив)", "2\n(негатив)")) +
   labs(
-    title = "Доходность стратегии 'Покупай на позитиве, продавай на негативе'",
-    subtitle = "Золотые столбцы — средняя прибыль за день; красные линии — 95% ДИ",
-    x = "Относительный день",
+    title = "Доходность стратегии по дням",
+    subtitle = "День 0: лонг на позитиве; Дни 1-2: шорт на негативе",
+    x = "Относительный день (тип сигнала)",
     y = "Стратегическая AAR"
   ) +
-  theme_minimal()
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold"),
+        plot.subtitle = element_text(size = 9, color = "gray30"))
 ```
 
 ```{r}
-# === CAAR стратегии: накопление с дня 0 ===
-caar_strategy <- aar_strategy |>
-  filter(rel_day >= 0) |>
+# Подготовка данных для графика CAAR стратегии
+caar_for_plot <- aar_strategy_by_day |>
   arrange(rel_day) |>
   mutate(
     CAAR_strat = cumsum(AAR_strat),
+    # Стандартная ошибка накопленной доходности (корень из суммы квадратов)
     se_CAAR = sqrt(cumsum(se_strat^2)),
-    t_stat_CAAR = CAAR_strat / se_CAAR,
-    p_value_CAAR = pt(-t_stat_CAAR, df = sum(N) - 1),
-    significant = p_value_CAAR < 0.05
+    # 95% доверительный интервал
+    CI_lower = CAAR_strat - 1.96 * se_CAAR,
+    CI_upper = CAAR_strat + 1.96 * se_CAAR
   )
 
-caar_strategy
-```
-
-```{r}
-ggplot(caar_strategy |> filter(AAR_strat > 0), aes(x = rel_day, y = CAAR_strat)) +
-  geom_line(color = "darkgreen", linewidth = 1) +
-  geom_point(color = "darkgreen") +
-  geom_ribbon(aes(ymin = CAAR_strat - 1.96 * se_CAAR, 
-                  ymax = CAAR_strat + 1.96 * se_CAAR), 
-              fill = "lightgreen", alpha = 0.2) +
-  geom_hline(yintercept = 0, linetype = "dashed") +
-  geom_vline(xintercept = 0, linetype = "dotted", color = "darkgreen") +
+# Построение графика
+ggplot(caar_for_plot, aes(x = rel_day, y = CAAR_strat)) +
+  geom_line(color = "gold3", linewidth = 1) +
+  geom_point(color = "gold3", size = 2) +
+  geom_ribbon(aes(ymin = CI_lower, ymax = CI_upper), 
+              fill = "gold", alpha = 0.2) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray40") +
+  geom_vline(xintercept = 0, linetype = "dotted", color = "darkgreen", linewidth = 0.8) +
+  scale_x_continuous(breaks = c(0, 1, 2), 
+                     labels = c("0\n(позитив)", "1\n(негатив)", "2\n(негатив)")) +
+  scale_y_continuous(labels = scales::percent_format(accuracy = 0.1)) +
   labs(
-    title = "Накопленная доходность стратегии (вход в день 0)",
-    subtitle = "Покупка при позитиве / шорт при негативе; зелёная область — 95% ДИ",
-    x = "Дней после входа в позицию",
-    y = "CAAR стратегии"
+    title = "Накопленная доходность стратегии",
+    subtitle = sprintf("CAAR = %.2f%% (p = %.3f, N = %d)", 
+                       strategy_result$CAAR * 100, 
+                       strategy_result$p_value,
+                       strategy_result$N),
+    x = "Относительный день (тип сигнала)",
+    y = "Накопленная стратегическая доходность (CAAR)",
+    caption = "Золотая область — 95% доверительный интервал"
   ) +
-  theme_minimal()
+  theme_minimal(base_size = 11) +
+  theme(
+    plot.title = element_text(face = "bold", size = 13),
+    plot.subtitle = element_text(size = 10, color = "gray30", margin = margin(b = 10)),
+    plot.caption = element_text(size = 8, color = "gray50"),
+    panel.grid.minor = element_blank(),
+    axis.title = element_text(face = "bold")
+  )
 ```
 
 # Сохраняем отдельные переменные

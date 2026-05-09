@@ -9,5 +9,7 @@ data/processed/*
 data/raw/*
 
 output/tables/*
+output/render/*
+
 
 !**/.gitkeep
