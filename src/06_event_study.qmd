@@ -251,7 +251,7 @@ cat("Из них - дней с новостями без доходностей:
 cat("Процент потерь:", es_data_stats$pct_lost, "%\n")
 ```
 
-## Двигаем новости и снова проверяем 
+## Двигаем новости и снова проверяем
 
 ```{r}
 # Ищем ближайший будущий торговый день
@@ -401,14 +401,14 @@ es_data |>
 Сдвиг событий с неторговых дней
 
 ```{r}
-# 1. Находим события на неторговых днях (где ret = NA)
+# Находим события на неторговых днях (где ret = NA)
 events_to_shift <- es_data |>
   filter(is_event == TRUE, is.na(ret)) |>
   select(ticker, event_date = date, sentiment_index, event_sign, event_strength)
 
 cat("Событий на неторговых днях:", nrow(events_to_shift), "\n")
 
-# 2. Функция: найти следующий торговый день
+# Функция поиска следующего торгового деня
 find_next_trade_date <- function(target_date, ticker, data) {
   trade_dates <- data |>
     filter(ticker == .env$ticker, !is.na(ret), !is.na(market_return)) |>
@@ -422,7 +422,7 @@ find_next_trade_date <- function(target_date, ticker, data) {
   return(min(future))
 }
 
-# 3. Сдвигаем даты на следующий торговый день
+# Сдвигаем даты на следующий торговый день
 events_shifted <- events_to_shift |>
   rowwise() |>
   mutate(
@@ -433,12 +433,12 @@ events_shifted <- events_to_shift |>
 
 cat("Событий успешно сдвинуто:", nrow(events_shifted), "\n")
 
-# 4. Удаляем старые события из es_data
+# Удаляем старые события из es_data
 es_data <- es_data |>
   filter(!(is_event == TRUE & is.na(ret)))
 
-# 5. Добавляем сдвинутые события в es_data
-# Для этого находим строки с новыми датами и заполняем поля событий
+# Добавляем сдвинутые события в es_data
+# Находим строки с новыми датами и заполняем поля событий
 for (i in seq_len(nrow(events_shifted))) {
   row <- events_shifted[i, ]
   
@@ -457,7 +457,7 @@ for (i in seq_len(nrow(events_shifted))) {
 cat("Строк в es_data после сдвига:", nrow(es_data), "\n")
 cat("Всего событий после сдвига:", sum(es_data$is_event, na.rm = TRUE), "\n")
 
-# 6. Проверка: событий на неторговых днях больше нет
+# Проверка: событий на неторговых днях больше нет
 check <- es_data |>
   filter(is_event == TRUE, is.na(ret)) |>
   nrow()
@@ -586,7 +586,6 @@ ar_results <- ar_results |>
 
 cat("Строк после фильтрации:", nrow(ar_results), "\n")
 ```
-
 
 Восстанавливаем корректную нумерацию
 
@@ -1086,4 +1085,3 @@ readr::write_rds(ar_results,
                  here("data", "processed", "ar_results.rds"),
                  compress = "gz")
 ```
-
